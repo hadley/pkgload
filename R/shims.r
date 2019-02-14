@@ -5,6 +5,7 @@ insert_imports_shims <- function(package) {
   imp_env <- imports_env(package)
   imp_env$system.file <- shim_system.file
   imp_env$library.dynam.unload <- shim_library.dynam.unload
+  imp_env$library.dynam <- shim_library.dynam
 }
 
 # Create a new environment as the parent of global, with devtools versions of
@@ -114,3 +115,103 @@ shim_library.dynam.unload <- function(chname, libpath,
   # trying to unload a different package's DLL.
   base::library.dynam.unload(chname, libpath, verbose, file.ext)
 }
+
+shim_library.dynam <- function(chname, package, lib.loc,
+                               verbose = getOption("verbose"),
+                               file.ext = .Platform$dynlib.ext, ...){
+  # This shim version of library.dynam addresses the issue raised in:
+  #   https://github.com/r-lib/pkgload/issues/48
+  # Specifically that load_all() fails to find libraries placed within inst/libs/
+  # This CRAN incompatible practice allows for including a dll compiled
+  #  elsewhere in an R package.  See also: https://stackoverflow.com/questions/8977346
+
+  # This shim function first attempts using base::libary.dynam() if that fails
+  # it uses  .inst_libary.dynam()  which is very similar but insearts "inst/"
+  # in the dll/so  path.  Finally, if both of those fail it goes back
+  # to  the base::library.dynam() so that the error state is based on that
+  # function.
+
+  a <- tryCatch(base::library.dynam(chname, package, lib.loc,
+                                    verbose = getOption("verbose"),
+                                    file.ext = .Platform$dynlib.ext, ...),
+                error = function(e) e)
+  if(inherits(a, "error")){
+    # Call version of library.dynam that adds the inst subdirectory to
+    # the dll paths
+    b <- inst_library.dynam(chname, package, lib.loc,
+                             verbose = getOption("verbose"),
+                             file.ext = .Platform$dynlib.ext, ...)
+
+    # If both attempts fail go back to base::library:dynam so error
+    # state and debugging are based on that function
+    if(inherits(b, "error"))
+      base::library.dynam(chname, package, lib.loc,
+                          verbose = getOption("verbose"),
+                          file.ext = .Platform$dynlib.ext, ...)
+
+  }
+}
+
+
+
+inst_library.dynam <- function (chname, package, lib.loc,
+                                 verbose = getOption("verbose"),
+                                 file.ext = .Platform$dynlib.ext, ...){
+  # Version of libary.dynam that looks for libraries or objects to load
+  # Within the "/inst" package subdirectory. This is for the rare case that
+  # a user has placed a linked library or shared object compiled elsewhere
+  # within the inst/.
+  # Note this was copied from base::library.dynam v3.4.4
+  # Two lines were edited by replacing "libs" with "inst/libs"
+  # Otherwise it is unchanged.
+
+  dll_list <- .dynLibs()
+  if (missing(chname) || !nzchar(chname))
+    return(dll_list)
+  package
+  lib.loc
+  r_arch <- .Platform$r_arch
+  chname1 <- paste0(chname, file.ext)
+  for (pkg in find.package(package, lib.loc, verbose = verbose)) {
+    DLLpath <- if (nzchar(r_arch))
+      file.path(pkg, "inst/libs", r_arch)  # This line differs from base::dynam.load
+    else file.path(pkg, "inst/libs")       # This line differs from base::dynam.load
+    file <- file.path(DLLpath, chname1)
+    if (file.exists(file))
+      break
+    else file <- ""
+  }
+  if (file == "")
+    if (.Platform$OS.type == "windows")
+      stop(gettextf("DLL %s not found: maybe not installed for this architecture?",
+                    sQuote(chname)), domain = NA)
+  else stop(gettextf("shared object %s not found", sQuote(chname1)),
+            domain = NA)
+  file <- file.path(normalizePath(DLLpath, "/", TRUE), chname1)
+  ind <- vapply(dll_list, function(x) x[["path"]] == file,
+                NA)
+  if (length(ind) && any(ind)) {
+    if (verbose)
+      if (.Platform$OS.type == "windows")
+        message(gettextf("DLL %s already loaded", sQuote(chname1)),
+                domain = NA)
+    else message(gettextf("shared object '%s' already loaded",
+                          sQuote(chname1)), domain = NA)
+    return(invisible(dll_list[[seq_along(dll_list)[ind]]]))
+  }
+  if (.Platform$OS.type == "windows") {
+    PATH <- Sys.getenv("PATH")
+    Sys.setenv(PATH = paste(gsub("/", "\\\\", DLLpath),
+                            PATH, sep = ";"))
+    on.exit(Sys.setenv(PATH = PATH))
+  }
+  if (verbose)
+    message(gettextf("now dyn.load(\"%s\") ...", file),
+            domain = NA)
+  dll <- if ("DLLpath" %in% names(list(...)))
+    dyn.load(file, ...)
+  else dyn.load(file, DLLpath = DLLpath, ...)
+  .dynLibs(c(dll_list, list(dll)))
+  invisible(dll)
+}
+

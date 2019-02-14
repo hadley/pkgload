@@ -111,3 +111,62 @@ test_that("Replacement system.file returns correct values when installed", {
   # Reset the libpath
   .libPaths(old_libpaths)
 })
+
+
+
+test_that("shim_library.dynam loads compiled dll/so from inst/src/", {
+
+  # Most of the code below is overhead to create a package that contains
+  # a compiled .dll (or .so) within  inst/libs/
+  # The process:
+  # 1. Install the testDllLoad test package (we are going to use its .dll)
+  # 2. Copy the testLibDynam package to a temporary directory
+  # 3. Copy the contents of the libs/ directory from the installed testDllLoad
+  #   package into the temporary testLibDynam/inst/libs
+  # 4. test that we can use load_all on the package and that the dll can be used
+
+  # Make a temp lib directory to install test package into
+  old_libpaths <- .libPaths()
+  tmp_libpath = file.path(tempdir(), "library-dynam-test")
+  if (!dir.exists(tmp_libpath)) dir.create(tmp_libpath)
+  .libPaths(c(tmp_libpath, .libPaths()))
+
+  # Reset the libpath on exit
+  on.exit(.libPaths(old_libpaths), add = TRUE)
+
+  # Create temp directory for assembling testLibDynam with dll or so in inst/libs/
+  temp_dir <-tempdir()
+  file.copy(test_path("testLibDynam"), temp_dir, recursive = TRUE)
+  pkg_dir <- file.path(temp_dir, "testLibDynam")
+  expect_true(file.exists(pkg_dir))
+
+  # Install testDllLoad package
+  install.packages(test_path("testDllLoad"), repos = NULL, type = "source",
+                   INSTALL_opts = "--no-multiarch", quiet = TRUE)
+  expect_true(require(testDllLoad))
+  unload("testDllLoad")
+
+  # Copy  libs/ from installed testDllLoad packageinto  testDynLib/inst/libs/
+  inst_dir <-file.path(pkg_dir, "inst")
+  compiled_libs <- file.path(tmp_libpath, "testDllLoad", "libs")
+  dir.create(file.path(inst_dir, "libs"), recursive = TRUE, showWarnings = FALSE)
+  file.copy(compiled_libs, inst_dir, recursive = TRUE, overwrite = TRUE)
+
+  load_all(pkg_dir)
+  expect_true(require(testLibDynam))
+
+  # Check that it's loaded properly, by running a function from the package.
+  # nulltest3() calls a C function which returns null.
+  expect_true(is.null(nulltest3()))
+
+  # Clean out compiled objects
+  pkgbuild::clean_dll("testLibDynam")
+
+  unload("testLibDynam")
+
+  # Unlink temporary package dir
+  unlink(pkg_dir, recursive = TRUE)
+
+
+})
+
