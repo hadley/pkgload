@@ -72,6 +72,11 @@
   compile the code or not. The `recompile` argument is now deprecated and will
   be removed in a future version of pkgload.
 
+* Changed how compiled objects are loaded so that both the standard location 
+  and, if that fails, the same relative path from within the inst/ subdirectory
+  are checked for compiled objects.  This allows packages with precompiled .so 
+  or .dll files within inst to be loaded with `load_all` (@ethanplunkett, #48).
+
 # pkgload 1.0.1
 
 * `unload()` now only removes S4 classes which were generated in the package
